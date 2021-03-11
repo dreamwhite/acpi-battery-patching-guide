@@ -433,6 +433,12 @@ Method (B1B4, 4, NotSerialized)\n
 end;
 ```
 
+Despite on our DSDT.aml sample there's no 32-bit field, basically you need to split it onto 4 8-bit fields.
+
+e.g.
+
+`ABCD, 32` will be splitted onto `ABC0, 8, ABC1, 8, ABC2, 8, ABC3,8` and whenever there's a reference of the field, just call it with `B1B4(ABC0, ABC1, ABC2, ABC3)`.
+
 ## Credits
 
 * **Apple** for macOS

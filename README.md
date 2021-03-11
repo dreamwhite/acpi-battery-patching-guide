@@ -403,9 +403,35 @@ It's important that you respect the previous field call:
 
 Before it was called with `^^PCI0.LPCB.EC0.BADC`, but now, since we splitted it onto two 8-bit fields, we call it via `B1B2(^^PCI0.LPCB.EC0.ADC0, ^^PCI0.LPCB.EC0.ADC1)`.
 
+Iterate this process for each 16-bit fields.
+
 Please note that variable naming has strict rules which you can consult here
 
 //TODO: give variable naming rules by looking on ACPICA 6.3
+
+
+## 32-bit fields patching
+
+As well as we did for 16-bit fields which we splitted onto 2 8-bit fields, we're going to split 32-bit onto 4 8-bit fields.
+
+This time instead, we're going to use another utility method called `B1B4`:
+
+open MaciASL patch menu, copy and paste this patch and click on apply
+
+```
+into method label B1B4 remove_entry;
+into definitionblock code_regex . insert
+begin
+Method (B1B4, 4, NotSerialized)\n
+{\n
+    Store(Arg3, Local0)\n
+    Or(Arg2, ShiftLeft(Local0, 8), Local0)\n
+    Or(Arg1, ShiftLeft(Local0, 8), Local0)\n
+    Or(Arg0, ShiftLeft(Local0, 8), Local0)\n
+    Return(Local0)\n
+}\n
+end;
+```
 
 ## Credits
 

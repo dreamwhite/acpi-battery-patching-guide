@@ -407,7 +407,7 @@ Iterate this process for each 16-bit fields.
 
 Please note that variable naming has strict rules which you can consult here
 
-//TODO: give variable naming rules by looking on ACPICA 6.3
+//TODO: give variable naming rules by looking on ACPICA 6.4
 
 
 ## 32-bit fields patching
@@ -438,6 +438,161 @@ Despite on our DSDT.aml sample there's no 32-bit field, basically you need to sp
 e.g.
 
 `ABCD, 32` will be splitted onto `ABC0, 8, ABC1, 8, ABC2, 8, ABC3,8` and whenever there's a reference of the field, just call it with `B1B4(ABC0, ABC1, ABC2, ABC3)`.
+
+## What about fields larger than 32 bits?
+
+In our provided DSDT.aml example there are a few fields whose size is larger than 32:
+
+<details><summary>More than 32-bit size larger fields</summary>
+<pre>
+            
+            Field (ERAM, ByteAcc, NoLock, Preserve)
+            {
+                Offset (0x04), 
+                FLD0,   64
+            }
+
+            Field (ERAM, ByteAcc, NoLock, Preserve)
+            {
+                Offset (0x04), 
+                FLD1,   128
+            }
+
+            Field (ERAM, ByteAcc, NoLock, Preserve)
+            {
+                Offset (0x04), 
+                FLD2,   192
+            }
+
+            Field (ERAM, ByteAcc, NoLock, Preserve)
+            {
+                Offset (0x04), 
+                FLD3,   256
+            }
+</pre>
+</details>
+N.B. we omitted `SMD0` as it's commonly found on trackpad device configuration and we don't wanna mess things up :P
+
+For those fields, after we checked that they're referenced inside DSDT.aml, we'll want to check if they're threated as read-only fields or they're written onto too.
+
+Below the found references:
+
+<details><summary>Found references</summary>
+<pre>
+
+                        If ((Local3 < 0x09))
+                        {
+                            Local2 = FLD0 /* \_SB_.PCI0.LPCB.EC0_.FLD0 */
+                        }
+                        ElseIf ((Local3 < 0x11))
+                        {
+                            Local2 = FLD1 /* \_SB_.PCI0.LPCB.EC0_.FLD1 */
+                        }
+                        ElseIf ((Local3 < 0x19))
+                        {
+                            Local2 = FLD2 /* \_SB_.PCI0.LPCB.EC0_.FLD2 */
+                        }
+                        Else
+                        {
+                            Local2 = FLD3 /* \_SB_.PCI0.LPCB.EC0_.FLD3 */
+                        }
+</pre>
+</details>
+
+In this case those fields are used as read-only fields as there's no assignment like `FLD3 = something`.
+
+For handling those fields we'll need to get our hands a little bit dirty: since splitting those fields onto 8-bits will be a tedious process and will make lot of confusion, we'll use another utility method called `RECB` which will do the work for us.
+
+What this method does basically is taking 2 arguments: the field-offset and it's size.
+Please note that the field size is expressed in bits, while the field offset in bytes, so you'll need to convert the bits in byte by dividing for 8.
+
+Let's make a quick example with `FLD0` variable: if we give a quick look at its code, there's an offset of `0x04` bytes and then a field of `0x40` (`64/8` in hex) is created.
+Moving on the only found reference, we can see that the value of our field will be assigned to a `Local2` variable. As we said before this is a read-only operation, thus we can proceed as it follows:
+
+- rename `FLD0` onto another name (e.g. `LD0A`; double check if it's not used in the DSDT)
+- replace the reference by calling `RECB` method with the following syntax `RECB(<offset>, <field_size divided by 8>)`: `Local2 = RECB (0x04, 0x40)`
+
+For the fields who don't have a `Offset(<size>)` declaration right before its declaration, we've gently took the section from RehabMan post:
+
+<details><summary>Expand this section</summary>
+<pre>
+
+    Field (ECF2, ByteAcc, Lock, Preserve)
+    {
+            Offset (0x10), <------ This is the offset declaration. The next field declared right after it will have an offset of 0x10
+       BDN0,   56,     //!!0x10
+            Offset (0x18)
+       BME0,   8,
+            Offset (0x20), <-------- Offset of 0x20
+       BMN0,   32,     //0x20
+       BMN2,   8,     //0x24 <------ In this case we'll have to sum 0x20 to 32/8 (0x4) and we'll have 0x24
+       BMN4,   88,    //0x25 <------- In this case we'll have to sum 0x24 to 8/8 (0x1) and we'll have 0x25
+       BCT0,   128,     //!! 0x30
+       BDN1,   56,     //!! 0x40
+            Offset (0x48),
+       BME1,   8,
+            Offset (0x50),
+       BMN1,   32,     //0x50
+       BMN3,   8,     //0x54
+       BMN5,   88,     //0x55
+       BCT1,   128,     //!!0x60
+
+</pre>
+</details>
+
+And what about write fields (like `ABCD = something`)?
+Let's suppose that `ABCD` is a 256-bit field and we found a reference like the above example. In this case we'll use another utility method called `WECB` (write EC buffer).
+Open MaciASL patch menu, copy and paste this patch and click on apply
+ 
+```
+into method label WE1B parent_label H_EC remove_entry;
+into method label WECB parent_label H_EC remove_entry;
+into device label H_EC insert
+begin
+Method (WE1B, 2, NotSerialized)\n
+{\n
+    OperationRegion(ERAM, EmbeddedControl, Arg0, 1)\n
+    Field(ERAM, ByteAcc, NoLock, Preserve) { BYTE, 8 }\n
+    Store(Arg1, BYTE)\n
+}\n
+Method (WECB, 3, Serialized)\n
+// Arg0 - offset in bytes from zero-based EC\n
+// Arg1 - size of buffer in bits\n
+// Arg2 - value to write\n
+{\n
+    ShiftRight(Add(Arg1,7), 3, Arg1)\n
+    Name(TEMP, Buffer(Arg1) { })\n
+    Store(Arg2, TEMP)\n
+    Add(Arg0, Arg1, Arg1)\n
+    Store(0, Local0)\n
+    While (LLess(Arg0, Arg1))\n
+    {\n
+        WE1B(Arg0, DerefOf(Index(TEMP, Local0)))\n
+        Increment(Arg0)\n
+        Increment(Local0)\n
+    }\n
+}\n
+end;
+```
+
+Then replace each reference with the following syntax:
+
+`WECB(<field_offset>,<field_size>, <store_value>)`
+
+e.g. if `ABCD` field is declared after a `Offset(0x40)` offset, and is large 256 bits and stores a value, you'll write something among these lines:
+
+`WECB(0x40, 0x20, <store_value>)`
+
+What we learn so? Well I know that this topic is still hot and you may have lot of difficult while understanding it and you'll probably won't accomplish anything in a few hours. Dedicate it the time you need understanding this.
+As you can see, the whole logic is just a bunch of additions and multiplication/divisions. Try if you can reach the same numbers we got :)
+Iterate this whole process for each field whose size is larger than 32-bit (e.g. 56,64,128,256 and so on)
+
+
+## Finish!
+
+After finishing this nightmare, save the patched DSDT.aml onto `OC/ACPI` folder and declare the DSDT onto your config. Double check that `SMCBatteryManager.kext` is present both in `Kexts` folder and in `config.plist/Kernel/Add` section.
+If everything went well you've successfully patched your battery using the static patching method.
+If you wanna harm yourself again, check out our hot-patching guide. It's a little bit more tedious, but if you managed to get a working battery status using the static patching method, the road will be downhill :")
 
 ## Credits
 

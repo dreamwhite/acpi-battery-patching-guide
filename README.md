@@ -16,6 +16,10 @@ Please note that, despite the guide explicitly talks about Clover, the patching 
 
 ## How to start then?
 
+Thanks to [@1Revenger1](https://github.com/1Revenger1), it's no more required manually patching EC fields. You'll just need to inject via your bootloader [ECEnabler](https://github.com/1Revenger1/ECEnabler) and [Lilu](https://github.com/acidanthera/Lilu) and it'll take care of everything
+
+# OUTDATED stuff. I'm gonna leave them just for educational purposes
+
 The requirements are just a few:
 
 - A copy of your DSDT extracted using OpenCore's SysReport feature
